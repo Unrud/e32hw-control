@@ -68,9 +68,9 @@ IP = '192.168.99.1'
 RTSP_PORT = 554
 RTSP_PATH = '/11'
 FFPLAY_CMD = 'ffplay'
-EXTRA_FFPLAY_PARAM = []
+EXTRA_FFPLAY_PARAM = ['-rtsp_transport', 'tcp']
 CONTROL_PORT = 9001
-INTERVAL = 0.05
+UPDATE_INTERVAL = 0.05
 SETTINGS_PATH = '.control.json'
 SAVE_SETTINGS = ['speed', 'throttle_trim', 'rudder_trim', 'elevator_trim',
                  'aileron_trim']
@@ -89,7 +89,6 @@ class RangedProperty(property):
         return self._values.get(id(obj), self._default_value)
 
     def _set(self, obj, value):
-        # assert self._min_value <= value and value <= self._max_value
         value = min(max(value, self._min_value), self._max_value)
         key = id(obj)
         if key not in self._values:
@@ -127,15 +126,80 @@ def bits_to_byte(*bits):
 
 
 class Vehicle:
+    inputs = [
+        {
+            "id": "throttle",
+            "type": "axis",
+            "desc": "Throttle"
+        }, {
+            "id": "rudder",
+            "type": "axis",
+            "desc": "Rudder",
+            "trim": True,
+            "trim_step": 2 / 64
+        }, {
+            "id": "aileron",
+            "type": "axis",
+            "desc": "Aileron",
+            "trim": True,
+            "trim_step": 2 / 64
+        }, {
+            "id": "elevator",
+            "type": "axis",
+            "desc": "Elevator",
+            "trim": True,
+            "trim_step": 2 / 64
+        }, {
+            "id": "fly_no_head",
+            "type": "toggle",
+            "desc": "Headless Mode"
+        }, {
+            "id": "speed",
+            "type": "toggle",
+            "desc": "Speed"
+        }, {
+            "id": "fly_360_roll",
+            "type": "once",
+            "desc": "3D Flip"
+        }, {
+            "id": "engine_start",
+            "type": "once",
+            "desc": "Engine Start"
+        }, {
+            "id": "fly_down",
+            "type": "once",
+            "desc": "Automatic Landing"
+        }, {
+            "id": "fly_up",
+            "type": "once",
+            "desc": "Automatic Take-Off"
+        }, {
+            "id": "fly_back",
+            "type": "toggle",
+            "desc": "Return Home (only in headless mode)"
+        }, {
+            "id": "stop",
+            "type": "push",
+            "desc": "Emergency Stop"
+        }, {
+            "id": "up",
+            "type": "push",
+            "desc": "Upwards Evasion"
+        }, {
+            "id": "light",
+            "type": "toggle",
+            "desc": "Light"
+        }
+    ]
 
-    throttle = RangedProperty(0, 127, 64)
-    throttle_trim = RangedProperty(32, 32, 32)
-    rudder = RangedProperty(0, 127, 64)
-    rudder_trim = RangedProperty(0, 63, 32)
-    aileron = RangedProperty(0, 127, 64)
-    aileron_trim = RangedProperty(0, 63, 32)
-    elevator = RangedProperty(0, 127, 64)
-    elevator_trim = RangedProperty(0, 63, 32)
+    throttle = RangedProperty(-1, 1, 0)
+    throttle_trim = RangedProperty(-1, 1, 0)
+    rudder = RangedProperty(-1, 1, 0)
+    rudder_trim = RangedProperty(-1, 1, 0)
+    aileron = RangedProperty(-1, 1, 0)
+    aileron_trim = RangedProperty(-1, 1, 0)
+    elevator = RangedProperty(-1, 1, 0)
+    elevator_trim = RangedProperty(-1, 1, 0)
 
     hight = False
     _fly_no_head = False
@@ -200,6 +264,9 @@ class Vehicle:
                 if k in j:
                     setattr(self, k, j[k])
 
+    def start_video(self):
+        return 'rtsp://{}:{}{}'.format(IP, RTSP_PORT, RTSP_PATH)
+
     def cleanup(self):
         with open(SETTINGS_PATH, 'w') as f:
             json.dump({k: getattr(self, k) for k in SAVE_SETTINGS}, f)
@@ -208,14 +275,14 @@ class Vehicle:
         cmd = [
             0xff,
             0x02,
-            self.throttle,
-            self.rudder,
-            self.elevator,
-            self.aileron,
-            self.throttle_trim,
-            self.aileron_trim,
-            self.elevator_trim,
-            self.rudder_trim,
+            min(math.floor(self.throttle * 64) + 64, 127),
+            min(math.floor(self.rudder * 64) + 64, 127),
+            min(math.floor(self.elevator * 64) + 64, 127),
+            min(math.floor(self.aileron * 64) + 64, 127),
+            min(math.floor(self.throttle_trim * 32) + 32, 63),
+            min(math.floor(self.aileron_trim * 32) + 32, 63),
+            min(math.floor(self.elevator_trim * 32) + 32, 63),
+            min(math.floor(self.rudder_trim * 32) + 32, 63),
             bits_to_byte(
                 self.hight,
                 self.fly_no_head,
@@ -271,108 +338,62 @@ class Ui:
             ('progress_normal', 'black', 'light gray'),
             ('progress_complete', 'white', 'black')]
 
-        throttle_label = urwid.Text(u'Throttle:')
-        throttle_trim_label = urwid.Text(u'Throttle Trim:')
-        rudder_label = urwid.Text(u'Rudder:')
-        rudder_trim_label = urwid.Text(u'Rudder Trim:')
-        aileron_label = urwid.Text(u'Aileron:')
-        aileron_trim_label = urwid.Text(u'Aileron Trim:')
-        elevator_label = urwid.Text(u'Elevator:')
-        elevator_trim_label = urwid.Text(u'Elevator Trim:')
-
         def trim(obj, userdata):
             axis_name, value = userdata
             axis_name += '_trim'
             old_value = getattr(self._vehicle, axis_name)
             setattr(self._vehicle, axis_name, old_value + value)
 
-        self._throttle = urwid.ProgressBar(
-            'progress_normal', 'progress_complete', 50)
-        self._throttle_trim = urwid.ProgressBar(
-            'progress_normal', 'progress_complete', 50)
-        throttle_trim_dec = urwid.Button('-', trim, ('throttle', -1))
-        throttle_trim_inc = urwid.Button('+', trim, ('throttle', +1))
-        throttle_trim_box = urwid.Columns([
-            ('weight', 0, throttle_trim_dec),
-            ('weight', 1, self._throttle_trim),
-            ('weight', 0, throttle_trim_inc)], min_width=5)
-        self._rudder = urwid.ProgressBar(
-            'progress_normal', 'progress_complete', 50)
-        self._rudder_trim = urwid.ProgressBar(
-            'progress_normal', 'progress_complete', 50)
-        rudder_trim_dec = urwid.Button('-', trim, ('rudder', -1))
-        rudder_trim_inc = urwid.Button('+', trim, ('rudder', +1))
-        rudder_trim_box = urwid.Columns([
-            ('weight', 0, rudder_trim_dec),
-            ('weight', 1, self._rudder_trim),
-            ('weight', 0, rudder_trim_inc)], min_width=5)
-        self._aileron = urwid.ProgressBar(
-            'progress_normal', 'progress_complete', 50)
-        self._aileron_trim = urwid.ProgressBar(
-            'progress_normal', 'progress_complete', 50)
-        aileron_trim_dec = urwid.Button('-', trim, ('aileron', -1))
-        aileron_trim_inc = urwid.Button('+', trim, ('aileron', +1))
-        aileron_trim_box = urwid.Columns([
-            ('weight', 0, aileron_trim_dec),
-            ('weight', 1, self._aileron_trim),
-            ('weight', 0, aileron_trim_inc)], min_width=5)
-        self._elevator = urwid.ProgressBar(
-            'progress_normal', 'progress_complete', 50)
-        self._elevator_trim = urwid.ProgressBar(
-            'progress_normal', 'progress_complete', 50)
-        elevator_trim_dec = urwid.Button('-', trim, ('elevator', -1))
-        elevator_trim_inc = urwid.Button('+', trim, ('elevator', +1))
-        elevator_trim_box = urwid.Columns([
-            ('weight', 0, elevator_trim_dec),
-            ('weight', 1, self._elevator_trim),
-            ('weight', 0, elevator_trim_inc)], min_width=5)
+        axis_labels = []
+        axis_values = []
+        self._bars = {}
+        for e in vehicle.inputs:
+            if e['type'] != 'axis':
+                continue
+            axis_labels.append(urwid.Text('{}:'.format(e['desc'])))
+            bar = urwid.ProgressBar(
+                'progress_normal', 'progress_complete', 50)
+            axis_values.append(bar)
+            self._bars[e['id']] = bar
+            if e.get('trim'):
+                axis_labels.append(urwid.Text('{} Trim:'.format(e['desc'])))
+                bar_trim = urwid.ProgressBar(
+                    'progress_normal', 'progress_complete', 50)
+                trim_step = e['trim_step']
+                dec = urwid.Button('-', trim, (e['id'], -trim_step))
+                inc = urwid.Button('+', trim, (e['id'], +trim_step))
+                axis_values.append(urwid.Columns([
+                    ('weight', 0, dec),
+                    ('weight', 1, bar_trim),
+                    ('weight', 0, inc)], min_width=5))
+                self._bars['{}_trim'.format(e['id'])] = bar_trim
 
-        labels = urwid.Pile([
-            throttle_label, throttle_trim_label, rudder_label,
-            rudder_trim_label, elevator_label, elevator_trim_label,
-            aileron_label, aileron_trim_label])
-        values = urwid.Pile([
-            self._throttle, throttle_trim_box, self._rudder, rudder_trim_box,
-            self._elevator, elevator_trim_box,
-            self._aileron, aileron_trim_box])
+        labels = urwid.Pile(axis_labels)
+        values = urwid.Pile(axis_values)
 
         labels_minwidth = max(w[0].pack()[0] for w in labels.contents)
         cols = urwid.Columns(
             [(labels_minwidth, labels), values], dividechars=1)
 
-        def ch(obj, state, name):
-            setattr(self._vehicle, name, state)
+        def press(obj, state, userdata):
+            _id, _type = userdata
+            if _type == 'once' and getattr(self._vehicle, _id):
+                return
+            setattr(self._vehicle, _id, state)
 
-        self._fly_no_head = urwid.CheckBox(
-            'Headless mode (Fly No Head)', on_state_change=ch,
-            user_data='fly_no_head')
-        self._speed = urwid.CheckBox(
-            'High speed mode (Speed)', on_state_change=ch, user_data='speed')
-        self._fly_360_roll = urwid.CheckBox(
-            '3D Flip (Fly 360 Roll)', on_state_change=ch,
-            user_data='fly_360_roll')
-        self._engine_start = urwid.CheckBox(
-            'Engine Start', on_state_change=ch, user_data='engine_start')
-        self._fly_down = urwid.CheckBox(
-            'Automatic landing (Fly Down)', on_state_change=ch,
-            user_data='fly_down')
-        self._fly_up = urwid.CheckBox(
-            'Automatic take-off (Fly Up)', on_state_change=ch,
-            user_data='fly_up')
-        self._fly_back = urwid.CheckBox(
-            'Return home (only in headless mode) (Fly Back)',
-            on_state_change=ch, user_data='fly_back')
-        self._stop = urwid.CheckBox(
-            'Emergency stop (Stop)', on_state_change=ch, user_data='stop')
-        self._up = urwid.CheckBox(
-            'Upwards evasion (Up)', on_state_change=ch, user_data='up')
-        self._light = urwid.CheckBox(
-            'Light', on_state_change=ch, user_data='light')
+        checkboxes = []
+        self._checkboxes = {}
 
-        rows = urwid.Pile([
-            cols, self._fly_no_head, self._speed, self._fly_360_roll,
-            self._engine_start, self._fly_down, self._fly_up, self._fly_back,
-            self._stop, self._up, self._light])
+        for e in vehicle.inputs:
+            if e['type'] == 'axis':
+                continue
+            ch = urwid.CheckBox(
+                '{} ({})'.format(e['desc'], e['id']), on_state_change=press,
+                user_data=(e['id'], e['type']))
+            checkboxes.append(ch)
+            self._checkboxes[e['id']] = ch
+
+        rows = urwid.Pile([cols, *checkboxes])
         top = urwid.AttrMap(urwid.Filler(rows, 'top'), 'bg')
         evl = urwid.AsyncioEventLoop(loop=asyncio.get_event_loop())
         self._loop = urwid.MainLoop(top, palette, event_loop=evl)
@@ -381,33 +402,10 @@ class Ui:
         pass
 
     def update(self):
-        self._throttle.set_completion(round(
-            self._vehicle.throttle / 127 * 100))
-        self._throttle_trim.set_completion(round(
-            self._vehicle.throttle_trim / 63 * 100))
-        self._rudder.set_completion(round(
-            self._vehicle.rudder / 127 * 100))
-        self._rudder_trim.set_completion(round(
-            self._vehicle.rudder_trim / 63 * 100))
-        self._aileron.set_completion(round(
-            self._vehicle.aileron / 127 * 100))
-        self._aileron_trim.set_completion(round(
-            self._vehicle.aileron_trim / 63 * 100))
-        self._elevator.set_completion(round(
-            self._vehicle.elevator / 127 * 100))
-        self._elevator_trim.set_completion(round(
-            self._vehicle.elevator_trim / 63 * 100))
-
-        self._fly_no_head.set_state(self._vehicle.fly_no_head)
-        self._speed.set_state(self._vehicle.speed)
-        self._fly_360_roll.set_state(self._vehicle.fly_360_roll)
-        self._engine_start.set_state(self._vehicle.engine_start)
-        self._fly_down.set_state(self._vehicle.fly_down)
-        self._fly_up.set_state(self._vehicle.fly_up)
-        self._fly_back.set_state(self._vehicle.fly_back)
-        self._stop.set_state(self._vehicle.stop)
-        self._up.set_state(self._vehicle.up)
-        self._light.set_state(self._vehicle.light)
+        for k, v in self._checkboxes.items():
+            v.set_state(getattr(self._vehicle, k))
+        for k, v in self._bars.items():
+            v.set_completion(round((getattr(self._vehicle, k) + 1) * 50))
 
     def loop(self):
         self._loop.run()
@@ -434,30 +432,18 @@ class Joystick:
                     v = tuple(v)
                 else:
                     v = ('btn', v)
-                # assert v[0] in ('btn', 'hat')
                 if v[1] is None or v[1] < 0:
                     continue
             elif k == 'DEADZONE':
                 if v is None or v < 0:
                     continue
-            # else:
-            #     raise AssertionError
             self._map[k] = v
         self._map['DEADZONE'] = self._map.get('DEADZONE', DEFAULT_DEADZONE)
-        self._max_axis = max((v[0] for k, v in self._map.items() if
-                              k.endswith('_axis')), default=-1)
-        self._max_btn = max(
-            (v[1] for k, v in self._map.items() if
-             k.endswith('_btn') and v[0] == 'btn'), default=-1)
-        self._max_hat = max(
-            (v[1] for k, v in self._map.items() if
-             k.endswith('_btn') and v[0] == 'hat'), default=-1)
 
     def cleanup(self):
         pass
 
     def _normalize_axis(self, value):
-        # assert -1.0 <= value and value <= 1.0
         value = min(max(value, -1.0), 1.0)
         abs_value = abs(value)
         if abs_value < self._map['DEADZONE']:
@@ -468,114 +454,109 @@ class Joystick:
             norm_value = min(1.0, norm_value)
             if value <= 0:
                 norm_value *= -1
-        return min(math.floor(norm_value * 64) + 64, 127)
+        return norm_value
 
-    def update(self):
+    def get_state(self):
+        buttons_down = set()
+        buttons_up = set()
+        active_buttons = set()
+        axes = []
+
         button_events = pygame.event.get([
             pygame.JOYBUTTONDOWN, pygame.JOYBUTTONUP, pygame.JOYHATMOTION])
         pygame.event.clear()
-        for i in range(pygame.joystick.get_count()):
-            joystick = pygame.joystick.Joystick(i)
-            joystick.init()
-            # choose the first joystick that has enough inputs
-            if (joystick.get_numaxes() <= self._max_axis or
-                    joystick.get_numbuttons() <= self._max_btn or
-                    joystick.get_numhats() <= self._max_hat // 4):
-                continue
+        if pygame.joystick.get_count() == 0:
+            return buttons_down, buttons_up, active_buttons, axes
+        joystick = pygame.joystick.Joystick(0)
+        joystick.init()
 
-            for axis_name in ('rudder', 'throttle', 'aileron', 'elevator'):
-                axis, invert = self._map.get('{}_axis'.format(axis_name),
+        for e in button_events:
+            if e.type == pygame.JOYBUTTONDOWN:
+                buttons_down.add(('btn', e.button))
+            elif e.type == pygame.JOYBUTTONUP:
+                buttons_up.add(('btn', e.button))
+            elif e.type == pygame.JOYHATMOTION:
+                prev_hat = self._prev_hats.get(e.hat, (0, 0))
+                self._prev_hats[e.hat] = e.value
+                if prev_hat[0] == -1 and e.value[0] != -1:
+                    buttons_up.add(('hat', e.hat * 4 + 0))
+                if prev_hat[0] != -1 and e.value[0] == -1:
+                    buttons_down.add(('hat', e.hat * 4 + 0))
+                if prev_hat[0] == 1 and e.value[0] != 1:
+                    buttons_up.add(('hat', e.hat * 4 + 1))
+                if prev_hat[0] != 1 and e.value[0] == 1:
+                    buttons_down.add(('hat', e.hat * 4 + 1))
+                if prev_hat[1] == 1 and e.value[1] != 1:
+                    buttons_up.add(('hat', e.hat * 4 + 2))
+                if prev_hat[1] != 1 and e.value[1] == 1:
+                    buttons_down.add(('hat', e.hat * 4 + 2))
+                if prev_hat[1] == -1 and e.value[1] != -1:
+                    buttons_up.add(('hat', e.hat * 4 + 3))
+                if prev_hat[1] != -1 and e.value[1] == -1:
+                    buttons_down.add(('hat', e.hat * 4 + 3))
+        for i in range(joystick.get_numhats()):
+            hat = joystick.get_hat(i)
+            if hat[0] == -1:
+                active_buttons.add(('hat', i * 4 + 0))
+            if hat[0] == 1:
+                active_buttons.add(('hat', i * 4 + 1))
+            if hat[1] == 1:
+                active_buttons.add(('hat', i * 4 + 2))
+            if hat[1] == -1:
+                active_buttons.add(('hat', i * 4 + 3))
+        for i in range(joystick.get_numbuttons()):
+            if joystick.get_button(i):
+                active_buttons.add(('btn', i))
+        for i in range(joystick.get_numaxes()):
+            raw_value = joystick.get_axis(i)
+            axes.append(self._normalize_axis(raw_value))
+        return buttons_down, buttons_up, active_buttons, axes
+
+    def update(self):
+        buttons_down, buttons_up, active_buttons, axes = self.get_state()
+        for e in self._vehicle.inputs:
+            if e['type'] == 'axis':
+                axis, invert = self._map.get('{}_axis'.format(e['id']),
                                              (None, None))
-                if axis is None:
+                if axis is None or axis >= len(axes):
                     continue
-                raw_value = joystick.get_axis(axis)
+                value = axes[axis]
                 if invert:
-                    raw_value *= -1
-                value = self._normalize_axis(raw_value)
-                setattr(self._vehicle, axis_name, value)
-
-            buttons_down = set()
-            buttons_up = set()
-            for e in button_events:
-                if e.joy != i:
-                    continue
-                if e.type == pygame.JOYBUTTONDOWN:
-                    buttons_down.add(('btn', e.button))
-                elif e.type == pygame.JOYBUTTONUP:
-                    buttons_up.add(('btn', e.button))
-                elif e.type == pygame.JOYHATMOTION:
-                    k = (e.joy, e.hat)
-                    prev_hat = self._prev_hats.get(k, (0, 0))
-                    self._prev_hats[k] = e.value
-                    if prev_hat[0] == -1 and e.value[0] != -1:
-                        buttons_up.add(('hat', e.hat * 4 + 0))
-                    if prev_hat[0] != -1 and e.value[0] == -1:
-                        buttons_down.add(('hat', e.hat * 4 + 0))
-                    if prev_hat[0] == 1 and e.value[0] != 1:
-                        buttons_up.add(('hat', e.hat * 4 + 1))
-                    if prev_hat[0] != 1 and e.value[0] == 1:
-                        buttons_down.add(('hat', e.hat * 4 + 1))
-                    if prev_hat[1] == 1 and e.value[1] != 1:
-                        buttons_up.add(('hat', e.hat * 4 + 2))
-                    if prev_hat[1] != 1 and e.value[1] == 1:
-                        buttons_down.add(('hat', e.hat * 4 + 2))
-                    if prev_hat[1] == -1 and e.value[1] != -1:
-                        buttons_up.add(('hat', e.hat * 4 + 3))
-                    if prev_hat[1] != -1 and e.value[1] == -1:
-                        buttons_down.add(('hat', e.hat * 4 + 3))
-
-            if self._map.get('fly_down_btn') in buttons_down:
-                self._vehicle.fly_down = True
-            if self._map.get('fly_up_btn') in buttons_down:
-                self._vehicle.fly_up = True
-            if self._map.get('engine_start_btn') in buttons_down:
-                self._vehicle.engine_start = True
-            if self._map.get('stop_btn') in buttons_down:
-                self._vehicle.stop = True
-            if self._map.get('fly_360_roll_btn') in buttons_down:
-                self._vehicle.fly_360_roll = True
-            if self._map.get('speed_btn') in buttons_down:
-                self._vehicle.speed ^= True
-            if self._map.get('light_btn') in buttons_down:
-                self._vehicle.light ^= True
-            if self._map.get('fly_no_head_btn') in buttons_down:
-                self._vehicle.fly_no_head ^= True
-            if self._map.get('fly_back_btn') in buttons_down:
-                self._vehicle.fly_back ^= True
-            if self._map.get('up_btn') in buttons_down:
-                self._vehicle.up = True
-
-            if self._map.get('rudder_trim_dec_btn') in buttons_down:
-                self._vehicle.rudder_trim -= 1
-            if self._map.get('rudder_trim_inc_btn') in buttons_down:
-                self._vehicle.rudder_trim += 1
-
-            if self._map.get('throttle_trim_dec_btn') in buttons_down:
-                self._vehicle.throttle_trim -= 1
-            if self._map.get('throttle_trim_inc_btn') in buttons_down:
-                self._vehicle.throttle_trim += 1
-
-            if self._map.get('aileron_trim_dec_btn') in buttons_down:
-                self._vehicle.aileron_trim -= 1
-            if self._map.get('aileron_trim_inc_btn') in buttons_down:
-                self._vehicle.aileron_trim += 1
-            if self._map.get('elevator_trim_dec_btn') in buttons_down:
-                self._vehicle.elevator_trim -= 1
-            if self._map.get('elevator_trim_inc_btn') in buttons_down:
-                self._vehicle.elevator_trim += 1
-
-            if self._map.get('stop_btn') in buttons_up:
-                self._vehicle.stop = False
-            if self._map.get('up_btn') in buttons_up:
-                self._vehicle.up = False
-
-            break
+                    value *= -1
+                setattr(self._vehicle, e['id'], value)
+                if e.get('trim'):
+                    button_dec = self._map.get(
+                        '{}_trim_dec_btn'.format(e['id']))
+                    button_inc = self._map.get(
+                        '{}_trim_inc_btn'.format(e['id']))
+                    trim_id = '{}_trim'.format(e['id'])
+                    trim_step = e['trim_step']
+                    if button_dec in buttons_down:
+                        setattr(self._vehicle, trim_id,
+                                getattr(self._vehicle, trim_id) - trim_step)
+                    if button_inc in buttons_down:
+                        setattr(self._vehicle, trim_id,
+                                getattr(self._vehicle, trim_id) + trim_step)
+            else:
+                button = self._map.get('{}_btn'.format(e['id']))
+                if e['type'] == 'once':
+                    if button in buttons_down:
+                        setattr(self._vehicle, e['id'], True)
+                elif e['type'] == 'toggle':
+                    if button in buttons_down:
+                        setattr(self._vehicle, e['id'],
+                                not getattr(self._vehicle, e['id']))
+                elif e['type'] == 'push':
+                    if button in active_buttons:
+                        setattr(self._vehicle, e['id'], True)
+                    elif button in buttons_up:
+                        setattr(self._vehicle, e['id'], False)
 
 
 class Video:
-    def __init__(self):
+    def __init__(self, vehicle):
         self._process = None
-        self._url = 'rtsp://{}:{}{}'.format(IP, RTSP_PORT, RTSP_PATH)
+        self._url = vehicle.start_video()
 
     def update(self):
         if not self._process or self._process.poll() is not None:
@@ -605,12 +586,12 @@ def main():
     ui = Ui(vehicle)
     services = [Joystick(vehicle, mapping), ui, vehicle]
     if args.video:
-        services.insert(0, Video())
+        services.insert(0, Video(vehicle))
 
     async def update():
         while True:
             [s.update() for s in services]
-            await asyncio.sleep(INTERVAL)
+            await asyncio.sleep(UPDATE_INTERVAL)
 
     asyncio.ensure_future(update())
     try:
