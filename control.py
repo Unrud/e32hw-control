@@ -28,42 +28,6 @@ import time
 import urwid
 import weakref
 
-# Aileron: left / right
-# Elevator: forward / backward
-# Rudder: rotate left / rotate right
-# Throttle: up / down
-
-# Example joystick configuration:
-# {
-#     "DEADZONE": 0.1,
-#
-#     "_comment": "possible values: AXIS or [AXIS, INVERTED] or null",
-#     "rudder_axis": 0,
-#     "throttle_axis": [1, true],
-#     "aileron_axis": 2,
-#     "elevator_axis": [3, true],
-#
-#     "_comment": "possible values: NR or [\"btn\", NR] or [\"hat\", NR] or null",
-#     "fly_down_btn": 6,
-#     "fly_up_btn": 3,
-#     "engine_start_btn": 1,
-#     "stop_btn": 7,
-#     "fly_360_roll_btn": 4,
-#     "speed_btn": 9,
-#     "light_btn": 8,
-#     "fly_no_head_btn": 0,
-#     "fly_back_btn": 2,
-#     "up_btn": 5,
-#     "rudder_trim_dec_btn": null,
-#     "rudder_trim_inc_btn": null,
-#     "throttle_trim_dec_btn": null,
-#     "throttle_trim_inc_btn": null,
-#     "aileron_trim_dec_btn": ["hat", 0],
-#     "aileron_trim_inc_btn": ["hat", 1],
-#     "elevator_trim_inc_btn": ["hat", 2],
-#     "elevator_trim_dec_btn": ["hat", 3]
-# }
-
 IP = '192.168.99.1'
 RTSP_PORT = 554
 RTSP_PATH = '/11'
@@ -72,9 +36,11 @@ EXTRA_FFPLAY_PARAM = ['-rtsp_transport', 'tcp']
 CONTROL_PORT = 9001
 UPDATE_INTERVAL = 0.05
 SETTINGS_PATH = '.control.json'
+DEFAULT_MAPPING_PATH = 'joystick.json'
 SAVE_SETTINGS = ['speed', 'throttle_trim', 'rudder_trim', 'elevator_trim',
                  'aileron_trim']
 DEFAULT_DEADZONE = 0.1
+TITLE = 'Joystick Control'
 
 
 class RangedProperty(property):
@@ -130,23 +96,23 @@ class Vehicle:
         {
             "id": "throttle",
             "type": "axis",
-            "desc": "Throttle"
+            "desc": "Throttle (Down<->Up)"
         }, {
             "id": "rudder",
             "type": "axis",
-            "desc": "Rudder",
+            "desc": "Rudder (Rotate Left<->Right)",
             "trim": True,
             "trim_step": 2 / 64
         }, {
             "id": "aileron",
             "type": "axis",
-            "desc": "Aileron",
+            "desc": "Aileron (Left<->Right)",
             "trim": True,
             "trim_step": 2 / 64
         }, {
             "id": "elevator",
             "type": "axis",
-            "desc": "Elevator",
+            "desc": "Elevator (Backward<->Forward)",
             "trim": True,
             "trim_step": 2 / 64
         }, {
@@ -269,7 +235,8 @@ class Vehicle:
 
     def cleanup(self):
         with open(SETTINGS_PATH, 'w') as f:
-            json.dump({k: getattr(self, k) for k in SAVE_SETTINGS}, f)
+            json.dump({k: getattr(self, k) for k in SAVE_SETTINGS}, f,
+                      indent=4, sort_keys=True)
 
     def update(self):
         cmd = [
@@ -335,8 +302,11 @@ class Ui:
         self._vehicle = vehicle
         palette = [
             ('bg', 'black', 'white'),
+            ('title', 'black,bold', 'white'),
             ('progress_normal', 'black', 'light gray'),
             ('progress_complete', 'white', 'black')]
+
+        title = urwid.Text(('title', '\n{}\n'.format(TITLE)), align='center')
 
         def trim(obj, userdata):
             axis_name, value = userdata
@@ -387,13 +357,12 @@ class Ui:
         for e in vehicle.inputs:
             if e['type'] == 'axis':
                 continue
-            ch = urwid.CheckBox(
-                '{} ({})'.format(e['desc'], e['id']), on_state_change=press,
-                user_data=(e['id'], e['type']))
+            ch = urwid.CheckBox('{}'.format(e['desc']), on_state_change=press,
+                                user_data=(e['id'], e['type']))
             checkboxes.append(ch)
             self._checkboxes[e['id']] = ch
 
-        rows = urwid.Pile([cols, *checkboxes])
+        rows = urwid.Pile([title, cols, *checkboxes])
         top = urwid.AttrMap(urwid.Filler(rows, 'top'), 'bg')
         evl = urwid.AsyncioEventLoop(loop=asyncio.get_event_loop())
         self._loop = urwid.MainLoop(top, palette, event_loop=evl)
@@ -406,6 +375,124 @@ class Ui:
             v.set_state(getattr(self._vehicle, k))
         for k, v in self._bars.items():
             v.set_completion(round((getattr(self._vehicle, k) + 1) * 50))
+
+    def loop(self):
+        self._loop.run()
+
+
+class MappingUi:
+    def __init__(self, vehicle, joystick):
+        self._vehicle = vehicle
+        self._joystick = joystick
+        self.mapping = {}
+        palette = [
+            ('bg', 'black', 'white'),
+            ('title', 'black,bold', 'white')]
+
+        title = urwid.Text(('title', '\n{}\n'.format(TITLE)), align='center')
+
+        def skip_or_finish(obj):
+            if self._current >= len(self._vehicle.inputs):
+                raise urwid.ExitMainLoop()
+            self._next_input()
+
+        self._text = urwid.Text('')
+        self._btn = urwid.Button('', on_press=skip_or_finish)
+
+        rows = urwid.Pile([title, self._text, self._btn])
+        top = urwid.AttrMap(urwid.Filler(rows, 'top'), 'bg')
+        evl = urwid.AsyncioEventLoop(loop=asyncio.get_event_loop())
+        self._loop = urwid.MainLoop(top, palette, event_loop=evl)
+
+        self._locked_axes = set()
+        self._current = 0
+        self._current_sub = 0  # for trimmer
+        self._update_text()
+
+    def _pretty_input(self, input_mapping):
+        if not input_mapping:
+            return 'unmapped'
+        if input_mapping[0] == 'hat':
+            return 'Hat {}'.format(input_mapping[1])
+        if input_mapping[0] == 'btn':
+            return 'Button {}'.format(input_mapping[1])
+        return 'Axis {}{}'.format(
+           input_mapping[0], ' (inverted)' if input_mapping[1] else '')
+
+    def _next_input(self):
+        if self._current < len(self._vehicle.inputs):
+            _input = self._vehicle.inputs[self._current]
+            if (_input['type'] == 'axis' and _input.get('trim') and
+                    self._current_sub < 2):
+                self._current_sub += 1
+            else:
+                self._current += 1
+                self._current_sub = 0
+        self._update_text()
+
+    def _update_text(self):
+        if self._current >= len(self._vehicle.inputs):
+            self._btn.set_label('Finish')
+        else:
+            self._btn.set_label('Skip')
+        text = ''
+        for i, _input in enumerate(self._vehicle.inputs[:self._current + 1]):
+            if _input['type'] == 'axis':
+                text += 'Choose a joystick axis for {} [left or down]'.format(
+                    _input['desc'])
+            else:
+                text += 'Choose a joystick button for {}'.format(
+                    _input['desc'])
+            if i < self._current or self._current_sub > 0:
+                input_name = '{}_{}'.format(
+                    _input['id'],
+                    'axis' if _input['type'] == 'axis' else 'btn')
+                text += ' ==> {}\n'.format(self._pretty_input(
+                    self.mapping.get(input_name)))
+            if not _input.get('trim'):
+                continue
+            for sub, sub_name, pretty_name in [(1, 'dec', 'Decrease'),
+                                               (2, 'inc', 'Increase')]:
+                if i < self._current or self._current_sub >= sub:
+                    text += ('Choose a joystick button for {} Trimmer '
+                             '{}').format(_input['desc'], pretty_name)
+                if i < self._current or self._current_sub > sub:
+                    input_name = '{}_trim_{}_btn'.format(
+                        _input['id'], input_name)
+                    text += ' ==> {}\n'.format(self._pretty_input(
+                        self.mapping.get(input_name)))
+        text = text.rstrip('\n')
+        self._text.set_text(text + '\n')
+
+    def cleanup(self):
+        pass
+
+    def update(self):
+        if self._current >= len(self._vehicle.inputs):
+            return
+        buttons_down, _, _, axes = self._joystick.get_state()
+        buttons_down = sorted(buttons_down)
+        for i, axis in enumerate(axes):
+            if abs(axis) < 0.1:
+                self._locked_axes.discard(i)
+        _input = self._vehicle.inputs[self._current]
+        if _input['type'] == 'axis' and self._current_sub > 0:
+            sub_name = 'dec' if self._current_sub == 1 else 'inc'
+            input_name = '{}_trim_{}_btn'.format(_input['id'], sub_name)
+            if buttons_down:
+                self.mapping[input_name] = buttons_down[0]
+                self._next_input()
+        elif _input['type'] == 'axis':
+            for i, axis in enumerate(axes):
+                if abs(axis) >= 0.9 and i not in self._locked_axes:
+                    self._locked_axes.add(i)
+                    input_name = '{}_axis'.format(_input['id'])
+                    self.mapping[input_name] = (i, axis >= 0)
+                    self._next_input()
+                    break
+        elif buttons_down:
+            self.mapping['{}_btn'.format(_input['id'])] = buttons_down[0]
+            self._next_input()
 
     def loop(self):
         self._loop.run()
@@ -483,27 +570,27 @@ class Joystick:
                 if prev_hat[0] != -1 and e.value[0] == -1:
                     buttons_down.add(('hat', e.hat * 4 + 0))
                 if prev_hat[0] == 1 and e.value[0] != 1:
-                    buttons_up.add(('hat', e.hat * 4 + 1))
-                if prev_hat[0] != 1 and e.value[0] == 1:
-                    buttons_down.add(('hat', e.hat * 4 + 1))
-                if prev_hat[1] == 1 and e.value[1] != 1:
                     buttons_up.add(('hat', e.hat * 4 + 2))
-                if prev_hat[1] != 1 and e.value[1] == 1:
+                if prev_hat[0] != 1 and e.value[0] == 1:
                     buttons_down.add(('hat', e.hat * 4 + 2))
-                if prev_hat[1] == -1 and e.value[1] != -1:
+                if prev_hat[1] == 1 and e.value[1] != 1:
                     buttons_up.add(('hat', e.hat * 4 + 3))
-                if prev_hat[1] != -1 and e.value[1] == -1:
+                if prev_hat[1] != 1 and e.value[1] == 1:
                     buttons_down.add(('hat', e.hat * 4 + 3))
+                if prev_hat[1] == -1 and e.value[1] != -1:
+                    buttons_up.add(('hat', e.hat * 4 + 1))
+                if prev_hat[1] != -1 and e.value[1] == -1:
+                    buttons_down.add(('hat', e.hat * 4 + 1))
         for i in range(joystick.get_numhats()):
             hat = joystick.get_hat(i)
             if hat[0] == -1:
                 active_buttons.add(('hat', i * 4 + 0))
             if hat[0] == 1:
-                active_buttons.add(('hat', i * 4 + 1))
-            if hat[1] == 1:
                 active_buttons.add(('hat', i * 4 + 2))
-            if hat[1] == -1:
+            if hat[1] == 1:
                 active_buttons.add(('hat', i * 4 + 3))
+            if hat[1] == -1:
+                active_buttons.add(('hat', i * 4 + 1))
         for i in range(joystick.get_numbuttons()):
             if joystick.get_button(i):
                 active_buttons.add(('btn', i))
@@ -570,36 +657,60 @@ class Video:
             self._process.terminate()
 
 
+def run_services(run_loop_fn, services):
+    done = False
+
+    async def update():
+        while not done:
+            [s.update() for s in services]
+            await asyncio.sleep(UPDATE_INTERVAL)
+    asyncio.ensure_future(update())
+    try:
+        run_loop_fn()
+    except KeyboardInterrupt:
+        return False
+    finally:
+        done = True
+        [s.cleanup() for s in services]
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('mapping', metavar='JOYSTICK_MAPPING',
-                        help='JSON file with button mapping')
+    parser.add_argument('--mapping', metavar='JOYSTICK_MAPPING',
+                        help='JSON file with button mapping '
+                        '(Default: {})'.format(DEFAULT_MAPPING_PATH),
+                        default=DEFAULT_MAPPING_PATH)
+    parser.add_argument('--remap', action='store_true', default=False,
+                        help='overwrite existing joystick mapping')
     parser.add_argument('--video', action='store_true', default=False,
                         help='open IP camera in media player '
                              '(don\'t use while flying, '
                              'will cause WLAN to stop working)')
     args = parser.parse_args()
-    with open(args.mapping) as f:
-        mapping = json.load(f)
+    create_mapping = args.remap
+    if not create_mapping:
+        try:
+            with open(args.mapping) as f:
+                mapping = json.load(f)
+        except FileNotFoundError:
+            create_mapping = True
 
     vehicle = Vehicle()
+    if create_mapping:
+        temp_joystick = Joystick(vehicle, {})
+        mapping_ui = MappingUi(vehicle, temp_joystick)
+        if not run_services(mapping_ui.loop, [mapping_ui]):
+            return
+        mapping = mapping_ui.mapping
+        with open(args.mapping, 'w') as f:
+            json.dump(mapping, f, indent=4, sort_keys=True)
     ui = Ui(vehicle)
-    services = [Joystick(vehicle, mapping), ui, vehicle]
+    joystick = Joystick(vehicle, mapping)
+    services = [joystick, ui, vehicle]
     if args.video:
         services.insert(0, Video(vehicle))
-
-    async def update():
-        while True:
-            [s.update() for s in services]
-            await asyncio.sleep(UPDATE_INTERVAL)
-
-    asyncio.ensure_future(update())
-    try:
-        ui.loop()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        [s.cleanup() for s in services]
+    run_services(ui.loop, services)
 
 
 if __name__ == '__main__':

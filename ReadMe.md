@@ -1,6 +1,6 @@
 # E32HW Joystick Controller
 
-Control the E32HW Quad-copter from a computer with a joystick.
+Control the Eachine E32HW Quad-copter from a computer with a joystick.
 
 ## Requirements
 
@@ -9,53 +9,20 @@ Control the E32HW Quad-copter from a computer with a joystick.
   * [Urwid](http://urwid.org)
   * a joystick
 
-## Configuration
-
-You need to create a JSON file with a button mapping for your joysick.
-
-Example file:
-
-```json
-{
-    "DEADZONE": 0.1,
-
-    "_comment": "possible values: AXIS or [AXIS, INVERTED] or null",
-    "rudder_axis": 0,
-    "throttle_axis": [1, true],
-    "aileron_axis": 2,
-    "elevator_axis": [3, true],
-
-    "_comment": "possible values: NR or [\"btn\", NR] or [\"hat\", NR] or null",
-    "fly_down_btn": 6,
-    "fly_up_btn": 3,
-    "engine_start_btn": 1,
-    "stop_btn": 7,
-    "fly_360_roll_btn": 4,
-    "speed_btn": 9,
-    "light_btn": 8,
-    "fly_no_head_btn": 0,
-    "fly_back_btn": 2,
-    "up_btn": 5,
-    "rudder_trim_dec_btn": null,
-    "rudder_trim_inc_btn": null,
-    "throttle_trim_dec_btn": null,
-    "throttle_trim_inc_btn": null,
-    "aileron_trim_dec_btn": ["hat", 0],
-    "aileron_trim_inc_btn": ["hat", 1],
-    "elevator_trim_inc_btn": ["hat", 2],
-    "elevator_trim_dec_btn": ["hat", 3]
-}
-```
-
 ## Usage
 
 Start the program with:
 
 ```
-python3 control.py joystick.json
+python3 control.py
 ```
 
+The first available joystick is used. You can configure the button mapping
+in the program.
+
 Connect to the WLAN of the quad-copter.
+
+Add the ``--help`` argument for further information.
 
 ## Technical details
 
