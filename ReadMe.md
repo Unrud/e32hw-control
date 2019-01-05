@@ -1,4 +1,4 @@
-# E32HW Joystick Controller
+# E32HW Control
 
 Control the Eachine E32HW Quad-copter from a computer with a joystick.
 

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.github.unrud.e32hw-control</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>E32HW Control</name>
+  <summary>Control the E32HW Quad-copter from a computer with a joystick</summary>
+  <launchable type="desktop-id">com.github.unrud.e32hw-control.desktop</launchable>
+  <launchable type="desktop-id">com.github.unrud.e32hw-control-remap.desktop</launchable>
+  <url type="bugtracker">https://github.com/Unrud/e32hw-control/issues</url>
+  <url type="homepage">https://github.com/Unrud/e32hw-control</url>
+  <developer_name>Unrud</developer_name>
+  <content_rating type="oars-1.1"/>
+</component>

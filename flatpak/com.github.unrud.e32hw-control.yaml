@@ -1,0 +1,70 @@
+app-id: com.github.unrud.e32hw-control
+runtime: org.freedesktop.Platform
+runtime-version: '18.08'
+sdk: org.freedesktop.Sdk
+command: e32hw-control
+finish-args:
+- --share=network
+- --device=all
+- --socket=wayland
+- --socket=x11
+- --share=ipc
+modules:
+- "shared-modules/pygame/pygame-1.9.4.json"
+
+- name: chrpath
+  sources:
+  - type: archive
+    url: http://deb.debian.org/debian/pool/main/c/chrpath/chrpath_0.16.orig.tar.gz
+    sha256: bb0d4c54bac2990e1bdf8132f2c9477ae752859d523e141e72b3b11a12c26e7b
+  cleanup:
+  - '*'
+
+- name: ffmpeg-ffplay
+  config-opts:
+  - --disable-debug
+  - --disable-doc
+  - --disable-static
+  - --enable-gpl
+  - --enable-optimizations
+  - --enable-shared
+  - --enable-ffplay
+  - --disable-ffprobe
+  - --disable-ffmpeg
+  - --disable-ffserver
+  - --disable-devices
+  sources:
+  - type: archive
+    url: https://ffmpeg.org/releases/ffmpeg-3.2.12.tar.xz
+    sha256: 8985cea7b1b3b2e0e2b2a8ac6187a7fb022fe8aa9d35101760a000205c59c412
+  post-install:
+  - install -Dm644 COPYING.GPLv3 /app/share/licenses/ffmpeg/COPYING
+  - chrpath -d /app/bin/ffplay
+  cleanup:
+  - /share/ffmpeg
+
+- name: urwid
+  buildsystem: simple
+  build-commands:
+  - python3 -mpip install . --prefix=/app --no-index --find-links .
+  sources:
+  - type: archive
+    url: https://pypi.org/packages/source/u/urwid/urwid-2.0.1.tar.gz
+    sha256: 644d3e3900867161a2fc9287a9762753d66bd194754679adb26aede559bcccbc
+
+- name: e32hw-control
+  buildsystem: simple
+  sources:
+  - type: git
+    path: ..
+    branch: master
+  build-commands:
+  - sed -i 's|^\(INSTALL_DIR=\).*|\1/app/share/e32hw-control|' desktop/e32hw-control
+  - install -Dm0775 -t /app/share/e32hw-control/ control.py
+  - install -Dm0755 -t /app/bin desktop/e32hw-control desktop/e32hw-control-wait-on-error
+  - install -Dm0644 -t /app/share/appdata desktop/com.github.unrud.e32hw-control.appdata.xml
+  - install -Dm0644 -t /app/share/applications desktop/com.github.unrud.e32hw-control.desktop desktop/com.github.unrud.e32hw-control-remap.desktop
+  - install -Dm0644 desktop/com.github.unrud.e32hw-control_64.png /app/share/icons/hicolor/64x64/apps/com.github.unrud.e32hw-control.png
+  - install -Dm0644 desktop/com.github.unrud.e32hw-control_128.png /app/share/icons/hicolor/128x128/apps/com.github.unrud.e32hw-control.png
+  - install -Dm0644 desktop/com.github.unrud.e32hw-control_256.png /app/share/icons/hicolor/256x256/apps/com.github.unrud.e32hw-control.png
+

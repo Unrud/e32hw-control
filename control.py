@@ -32,7 +32,7 @@ IP = '192.168.99.1'
 RTSP_PORT = 554
 RTSP_PATH = '/11'
 FFPLAY_CMD = 'ffplay'
-EXTRA_FFPLAY_PARAM = ['-rtsp_transport', 'tcp']
+EXTRA_FFPLAY_PARAM = ['-rtsp_transport', 'tcp', '-an']
 CONTROL_PORT = 9001
 UPDATE_INTERVAL = 0.05
 SETTINGS_PATH = '.control.json'
@@ -40,7 +40,7 @@ DEFAULT_MAPPING_PATH = 'joystick.json'
 SAVE_SETTINGS = ['speed', 'throttle_trim', 'rudder_trim', 'elevator_trim',
                  'aileron_trim']
 DEFAULT_DEADZONE = 0.1
-TITLE = 'Joystick Control'
+TITLE = 'E32HW Control'
 
 
 class RangedProperty(property):
@@ -362,7 +362,11 @@ class Ui:
             checkboxes.append(ch)
             self._checkboxes[e['id']] = ch
 
-        rows = urwid.Pile([title, cols, *checkboxes])
+        def exit(obj):
+            raise urwid.ExitMainLoop()
+        exit_btn = urwid.Button('Exit', on_press=exit)
+
+        rows = urwid.Pile([title, cols, *checkboxes, exit_btn])
         top = urwid.AttrMap(urwid.Filler(rows, 'top'), 'bg')
         evl = urwid.AsyncioEventLoop(loop=asyncio.get_event_loop())
         self._loop = urwid.MainLoop(top, palette, event_loop=evl)
@@ -385,21 +389,26 @@ class MappingUi:
         self._vehicle = vehicle
         self._joystick = joystick
         self.mapping = {}
+        self.success = False
         palette = [
             ('bg', 'black', 'white'),
             ('title', 'black,bold', 'white')]
 
         title = urwid.Text(('title', '\n{}\n'.format(TITLE)), align='center')
+        self._text = urwid.Text('')
 
         def skip_or_finish(obj):
             if self._current >= len(self._vehicle.inputs):
+                self.success = True
                 raise urwid.ExitMainLoop()
             self._next_input()
-
-        self._text = urwid.Text('')
         self._btn = urwid.Button('', on_press=skip_or_finish)
 
-        rows = urwid.Pile([title, self._text, self._btn])
+        def exit(obj):
+            raise urwid.ExitMainLoop()
+        exit_btn = urwid.Button('Exit', on_press=exit)
+
+        rows = urwid.Pile([title, self._text, self._btn, exit_btn])
         top = urwid.AttrMap(urwid.Filler(rows, 'top'), 'bg')
         evl = urwid.AsyncioEventLoop(loop=asyncio.get_event_loop())
         self._loop = urwid.MainLoop(top, palette, event_loop=evl)
@@ -700,7 +709,8 @@ def main():
     if create_mapping:
         temp_joystick = Joystick(vehicle, {})
         mapping_ui = MappingUi(vehicle, temp_joystick)
-        if not run_services(mapping_ui.loop, [mapping_ui]):
+        if (not run_services(mapping_ui.loop, [mapping_ui]) or
+                not mapping_ui.success):
             return
         mapping = mapping_ui.mapping
         with open(args.mapping, 'w') as f:

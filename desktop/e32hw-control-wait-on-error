@@ -1,0 +1,8 @@
+#!/bin/bash
+
+e32hw-control "$@"
+if [ $? -ne 0 ]; then
+	echo
+	read -n 1 -s -r -p "Press any key to close"
+	echo
+fi

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=E32HW Remap
+Terminal=true
+Exec=e32hw-control-wait-on-error --remap
+Icon=com.github.unrud.e32hw-control
+Categories=Network;ConsoleOnly;
